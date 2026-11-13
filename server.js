@@ -342,10 +342,10 @@ function render(a){
     +'</div>'
     +'<div class="pao"><div class="av">🐣</div><div><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:#8a2c3a;margin-bottom:6px">Diagnóstico Personal · Por Miss Pao</div><div style="font-size:15px;line-height:1.6">'+a.recruiterMessage+'</div></div></div>'
     +'<div class="tabs">'
-    +'<button class="tab a" onclick="tab(\'resumen\',this)">📝 Resumen</button>'
-    +'<button class="tab" onclick="tab(\'diag\',this)">🔍 Diagnóstico</button>'
-    +'<button class="tab" onclick="tab(\'ats\',this)">🤖 ATS</button>'
-    +'<button class="tab" onclick="tab(\'plan\',this)">🚀 Plan</button>'
+    +'<button class="tab a" onclick="tab(\\'resumen\\',this)">📝 Resumen</button>'
+    +'<button class="tab" onclick="tab(\\'diag\\',this)">🔍 Diagnóstico</button>'
+    +'<button class="tab" onclick="tab(\\'ats\\',this)">🤖 ATS</button>'
+    +'<button class="tab" onclick="tab(\\'plan\\',this)">🚀 Plan</button>'
     +'</div>'
     // Resumen
     +'<div class="pane a" id="p-resumen">'
@@ -369,9 +369,9 @@ function render(a){
       : a.improvementPlan.slice(0,2).map((s,i)=>'<div class="ps"><div class="pn">'+(i+1)+'</div><div style="font-size:14px;line-height:1.6;padding-top:5px">'+s+'</div></div>').join('')
         +'<div class="pw"><div style="filter:blur(5px);pointer-events:none">'+a.improvementPlan.slice(2).map((s,i)=>'<div class="ps"><div class="pn">'+(i+3)+'</div><div style="font-size:14px;line-height:1.6;padding-top:5px">'+s+'</div></div>').join('')+'</div>'
         +'<div style="position:absolute;inset:0;background:linear-gradient(to bottom,transparent,var(--bg) 40%);display:flex;flex-direction:column;align-items:center;justify-content:flex-end;padding:24px">'
-        +'<div style="background:white;border:1px solid var(--border);border-radius:20px;padding:28px;text-align:center;max-width:420px;width:100%"><h3 style="font-family:\'Cormorant Garamond\',serif;font-size:24px;margin-bottom:8px">Desbloquea los '+(a.improvementPlan.length-2)+' pasos restantes</h3>'
+        +'<div style="background:white;border:1px solid var(--border);border-radius:20px;padding:28px;text-align:center;max-width:420px;width:100%"><h3 style="font-family:\\'Cormorant Garamond\\',serif;font-size:24px;margin-bottom:8px">Desbloquea los '+(a.improvementPlan.length-2)+' pasos restantes</h3>'
         +'<p style="font-size:14px;color:var(--gray);margin-bottom:16px">Recibe tu plan completo + análisis en tu email. Gratis.</p>'
-        +'<button class="btn" onclick="document.getElementById(\'mb\').classList.add(\'o\')">Recibir análisis completo →</button></div></div></div>'
+        +'<button class="btn" onclick="document.getElementById(\\'mb\\').classList.add(\\'o\\')">Recibir análisis completo →</button></div></div></div>'
     )
     +'</div></div>';
   setTimeout(()=>{const b=document.getElementById('atsb');if(b)b.style.width=a.atsScore+'%'},300);
