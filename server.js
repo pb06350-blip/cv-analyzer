@@ -12,7 +12,6 @@ app.use(express.json());
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-// In-memory storage (replace with Redis if you need persistence)
 const store = new Map();
 
 // ─── Parse CV ───────────────────────────────────────────────────────────────
@@ -49,13 +48,122 @@ async function analyze(jobText, cvText) {
   "strengths": ["fortaleza1","fortaleza2","fortaleza3"],
   "findings": [{"severity":"alta|media|baja","title":"título","suggestion":"sugerencia","example":"ejemplo opcional"}],
   "suggestedRoles": [{"title":"rol","matchPct":0-100,"reason":"razón"}],
-  "improvementPlan": ["paso1","paso2","paso3","paso4","paso5"]
+  "improvementPlan": ["paso1","paso2","paso3","paso4","paso5"],
+  "jobTitle": "título del cargo extraído de la oferta"
 }`
     }]
   });
   let text = msg.content[0].text.trim();
   text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
   return JSON.parse(text);
+}
+
+// ─── Generate Questions ─────────────────────────────────────────────────────
+async function generateQuestions(jobText, cvText) {
+  const msg = await anthropic.messages.create({
+    model: "claude-haiku-4-5-20251001",
+    max_tokens: 1500,
+    system: `Eres Miss Pao, reclutadora experta en empleo remoto latinoamericano. Genera preguntas específicas para evaluar al candidato para ESA vacante concreta. Responde SOLO con JSON válido sin markdown.`,
+    messages: [{
+      role: "user",
+      content: `OFERTA:\n${jobText.slice(0, 2500)}\n\nCV:\n${cvText.slice(0, 2000)}\n\nGenera preguntas de evaluación. Sé específica con las herramientas, sectores y habilidades mencionadas en la oferta:\n{\n  "skillQuestions": [\n    {"id": "q1", "question": "pregunta sobre habilidad específica de la oferta", "hint": "qué evalúa esta pregunta"},\n    {"id": "q2", "question": "...", "hint": "..."},\n    {"id": "q3", "question": "...", "hint": "..."},\n    {"id": "q4", "question": "...", "hint": "..."},\n    {"id": "q5", "question": "...", "hint": "..."}\n  ],\n  "screeningQuestions": [\n    {"id": "s1", "question": "pregunta de filtro sobre requisito clave", "type": "yesno"},\n    {"id": "s2", "question": "...", "type": "text"},\n    {"id": "s3", "question": "...", "type": "yesno"}\n  ]\n}`
+    }]
+  });
+  let text = msg.content[0].text.trim();
+  text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  return JSON.parse(text);
+}
+
+// ─── Generate Adapted Content ───────────────────────────────────────────────
+async function generateAdaptedContent(jobText, cvText, answers) {
+  const answersText = answers.map((a, i) => `Pregunta ${i+1}: ${a.question}\nRespuesta: ${a.answer}`).join('\n\n');
+
+  const msg = await anthropic.messages.create({
+    model: "claude-haiku-4-5-20251001",
+    max_tokens: 4000,
+    system: `Eres Miss Pao, reclutadora ATS experta en empleo remoto latinoamericano. Adaptas CVs y redactas cartas de presentación efectivas. Responde SOLO con JSON válido sin markdown ni texto extra.
+
+FORMATO DE CARTA DE PRESENTACIÓN:
+- Inicio: "Hola [nombre empresa o reclutador],"
+- Párrafo 1: credibilidad de la persona + interés genuino en el cargo (mencionar algo específico de la empresa). Incluir 2-3 preguntas concretas sobre el rol, por ejemplo: "¿qué herramientas utilizan para gestionar sus proyectos?"
+- Párrafo 2: CTA — invitar a revisar portafolio/trabajo relevante + proponer una conversación breve
+- Cierre con nombre
+- Español neutro latinoamericano, primera persona, tono profesional pero cercano
+- MÁXIMO 350 palabras
+- PROHIBIDO usar clichés como "soy proactiva", "orientada a resultados", "apasionada", "trabajo en equipo"`,
+    messages: [{
+      role: "user",
+      content: `OFERTA:\n${jobText.slice(0, 2500)}\n\nCV ORIGINAL:\n${cvText.slice(0, 2500)}\n\nRESPUESTAS DEL CANDIDATO:\n${answersText}\n\nGenera JSON con este formato exacto:\n{\n  "adaptedCV": {\n    "name": "nombre completo del candidato",\n    "contact": "email | teléfono | LinkedIn | ciudad, país",\n    "summary": "resumen profesional adaptado a esta vacante específica (3-4 oraciones con keywords de la oferta)",\n    "experience": [\n      {"title": "cargo", "company": "empresa", "period": "mes año – mes año", "achievements": ["logro cuantificado 1", "logro cuantificado 2", "logro 3"]}\n    ],\n    "education": [\n      {"degree": "título", "institution": "institución", "year": "año"}\n    ],\n    "skills": ["habilidad relevante 1", "habilidad relevante 2"],\n    "languages": ["Español nativo", "Inglés B2"]\n  },\n  "coverLetter": "carta de presentación completa siguiendo el formato indicado (texto plano, párrafos separados por \\n\\n)",\n  "interviewTips": ["consejo específico 1", "consejo 2", "consejo 3", "consejo 4", "consejo 5"],\n  "applicationEmail": "email@empresa.com extraído de la oferta, o null si no hay",\n  "improvements": ["Mejora: descripción de qué se adaptó y por qué fortalece la postulación 1", "Mejora 2", "Mejora 3"]\n}`
+    }]
+  });
+  let text = msg.content[0].text.trim();
+  text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  return JSON.parse(text);
+}
+
+// ─── Render CV HTML ─────────────────────────────────────────────────────────
+function renderCVHtml(cv, jobTitle, autoPrint) {
+  const exp = (cv.experience || []).map(e =>
+    `<div class="exp-item">
+      <div class="exp-header"><span class="exp-title">${e.title}</span><span class="exp-period">${e.period || ''}</span></div>
+      <div class="exp-company">${e.company || ''}</div>
+      <ul class="exp-ach">${(e.achievements || []).map(a => `<li>${a}</li>`).join('')}</ul>
+    </div>`
+  ).join('');
+  const edu = (cv.education || []).map(e =>
+    `<div class="edu-item"><span class="edu-deg">${e.degree}</span> · ${e.institution || ''} ${e.year ? '· ' + e.year : ''}</div>`
+  ).join('');
+  const skills = (cv.skills || []).map(s => `<span class="skill-tag">${s}</span>`).join('');
+  const langs = (cv.languages || []).map(l => `<span class="skill-tag lang">${l}</span>`).join('');
+
+  return `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>${cv.name || 'CV'} · ${jobTitle || 'CV Adaptado'}</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  @page{margin:15mm 20mm}
+  body{font-family:'Helvetica Neue',Arial,sans-serif;font-size:11pt;color:#111;line-height:1.5;background:#fff;padding:30px 40px}
+  @media print{body{padding:0}}
+  .cv-header{border-bottom:2.5px solid #f77e8a;padding-bottom:16px;margin-bottom:20px}
+  h1{font-size:26pt;font-weight:700;letter-spacing:-.5px;margin-bottom:4px}
+  .contact{font-size:9.5pt;color:#555}
+  .badge{display:inline-block;background:#fff5f7;border:1px solid #fce7f3;color:#c0405a;font-size:8.5pt;padding:2px 10px;border-radius:9999px;margin-top:6px}
+  h2{font-size:11pt;font-weight:700;text-transform:uppercase;letter-spacing:2px;color:#f77e8a;margin:18px 0 8px;border-bottom:1px solid #fce7f3;padding-bottom:4px}
+  .summary{font-size:11pt;line-height:1.65;color:#222}
+  .exp-item{margin-bottom:14px}
+  .exp-header{display:flex;justify-content:space-between;align-items:baseline}
+  .exp-title{font-weight:700;font-size:11.5pt}
+  .exp-period{font-size:9.5pt;color:#666}
+  .exp-company{font-size:10pt;color:#555;margin-bottom:4px}
+  .exp-ach{list-style:none;padding:0}
+  .exp-ach li{font-size:10.5pt;color:#333;padding-left:14px;position:relative;margin-bottom:2px}
+  .exp-ach li:before{content:"▸";position:absolute;left:0;color:#f77e8a;font-size:9pt}
+  .edu-item{margin-bottom:6px;font-size:10.5pt}
+  .edu-deg{font-weight:600}
+  .skills-wrap{display:flex;flex-wrap:wrap;gap:6px}
+  .skill-tag{background:#f3f4f6;border-radius:6px;padding:3px 10px;font-size:9.5pt;color:#444}
+  .skill-tag.lang{background:#fff5f7;color:#c0405a}
+  .print-btn{position:fixed;bottom:24px;right:24px;background:linear-gradient(135deg,#f77e8a,#e85f6e);color:white;border:none;padding:12px 28px;border-radius:9999px;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 4px 20px rgba(247,126,138,.4)}
+  @media print{.print-btn{display:none}}
+</style>
+${autoPrint ? '<script>window.addEventListener("load",()=>setTimeout(window.print,600))<\/script>' : ''}
+</head>
+<body>
+<div class="cv-header">
+  <h1>${cv.name || ''}</h1>
+  <div class="contact">${cv.contact || ''}</div>
+  ${jobTitle ? `<span class="badge">✨ Adaptado para: ${jobTitle}</span>` : ''}
+</div>
+${cv.summary ? `<h2>Perfil Profesional</h2><p class="summary">${cv.summary}</p>` : ''}
+${exp ? `<h2>Experiencia</h2>${exp}` : ''}
+${edu ? `<h2>Educación</h2>${edu}` : ''}
+${skills ? `<h2>Habilidades</h2><div class="skills-wrap">${skills}</div>` : ''}
+${langs ? `<h2>Idiomas</h2><div class="skills-wrap">${langs}</div>` : ''}
+<button class="print-btn" onclick="window.print()">🖨 Descargar PDF</button>
+</body>
+</html>`;
 }
 
 // ─── Send Email ──────────────────────────────────────────────────────────────
@@ -93,7 +201,14 @@ app.post("/api/analyze", upload.single("cv"), async (req, res) => {
     const result = await analyze(job, cvText);
 
     const id = nanoid(10);
-    store.set(id, { ...result, id, fileName: req.file.originalname, createdAt: new Date().toISOString(), unlocked: false });
+    store.set(id, {
+      ...result, id,
+      fileName: req.file.originalname,
+      jobText: job,
+      cvText,
+      createdAt: new Date().toISOString(),
+      unlocked: false
+    });
 
     if (process.env.SHEETS_WEBHOOK_URL) {
       fetch(process.env.SHEETS_WEBHOOK_URL, {
@@ -113,7 +228,56 @@ app.post("/api/analyze", upload.single("cv"), async (req, res) => {
 app.get("/api/analysis/:id", (req, res) => {
   const data = store.get(req.params.id);
   if (!data) return res.status(404).json({ error: "No encontrado" });
-  res.json(data);
+  const { jobText, cvText, ...safe } = data;
+  res.json(safe);
+});
+
+app.get("/api/questions/:id", async (req, res) => {
+  try {
+    const data = store.get(req.params.id);
+    if (!data) return res.status(404).json({ error: "Análisis no encontrado" });
+    if (data.questions) return res.json(data.questions);
+
+    const questions = await generateQuestions(data.jobText || '', data.cvText || '');
+    store.set(req.params.id, { ...data, questions });
+    res.json(questions);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message || "Error al generar preguntas" });
+  }
+});
+
+app.post("/api/generate/:id", async (req, res) => {
+  try {
+    const data = store.get(req.params.id);
+    if (!data) return res.status(404).json({ error: "Análisis no encontrado" });
+    const { answers } = req.body;
+    if (!answers || !Array.isArray(answers)) return res.status(400).json({ error: "Faltan respuestas" });
+
+    const generated = await generateAdaptedContent(data.jobText || '', data.cvText || '', answers);
+    store.set(req.params.id, { ...data, generated });
+    res.json(generated);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message || "Error al generar CV adaptado" });
+  }
+});
+
+app.get("/api/generated/:id", (req, res) => {
+  const data = store.get(req.params.id);
+  if (!data || !data.generated) return res.status(404).json({ error: "No encontrado" });
+  res.json(data.generated);
+});
+
+app.get("/api/cv/:id", (req, res) => {
+  const data = store.get(req.params.id);
+  if (!data || !data.generated || !data.generated.adaptedCV) {
+    return res.status(404).send("<h1>CV no encontrado</h1>");
+  }
+  const autoPrint = req.query.print === '1';
+  const html = renderCVHtml(data.generated.adaptedCV, data.jobTitle, autoPrint);
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(html);
 });
 
 app.post("/api/lead", async (req, res) => {
@@ -151,6 +315,7 @@ const NAV = (back) => `<nav style="display:flex;justify-content:space-between;al
   ${back ? `<a href="/" style="font-size:14px;color:var(--gray);text-decoration:none">← Analizar otro CV</a>` : `<div style="background:var(--pink);color:#8a2c3a;font-size:11px;font-weight:700;padding:4px 12px;border-radius:9999px">✨ Recruiter ATS con IA</div>`}
 </nav>`;
 
+// ─── Home ─────────────────────────────────────────────────────────────────────
 app.get("/", (_, res) => res.send(`<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Analizador de CV · Mypaotipss</title>${FONTS}
 <style>*{box-sizing:border-box;margin:0;padding:0}:root{${C}}body{font-family:'DM Sans',sans-serif;background:var(--bg);color:#111}
 .wrap{max-width:900px;margin:0 auto;padding:0 20px}
@@ -246,6 +411,7 @@ async function go(){
 function showErr(m){const e=document.getElementById('err');e.textContent=m;e.style.display='block'}
 </script></body></html>`));
 
+// ─── Results ──────────────────────────────────────────────────────────────────
 app.get("/results", (_, res) => res.send(`<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Diagnóstico de CV · Mypaotipss</title>${FONTS}
 <style>*{box-sizing:border-box;margin:0;padding:0}:root{${C}}body{font-family:'DM Sans',sans-serif;background:var(--bg);color:#111}
 .wrap{max-width:860px;margin:0 auto;padding:24px 20px}
@@ -292,6 +458,11 @@ app.get("/results", (_, res) => res.send(`<!DOCTYPE html><html lang="es"><head><
 .spin{width:20px;height:20px;border:2px solid var(--pink);border-top-color:var(--coral);border-radius:50%;animation:spin 1s linear infinite;display:inline-block;vertical-align:middle;margin-right:6px}
 .bspin{width:36px;height:36px;border:3px solid var(--pink);border-top-color:var(--coral);border-radius:50%;animation:spin 1s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
+.next-cta{background:linear-gradient(135deg,#fff0f3,#fce7f3);border:2px solid var(--pink);border-radius:20px;padding:28px;text-align:center;margin-top:8px}
+.next-cta h3{font-family:'Cormorant Garamond',serif;font-size:28px;margin-bottom:8px}
+.next-cta p{font-size:14px;color:var(--gray);margin-bottom:20px;line-height:1.6}
+.next-btn{display:inline-block;background:linear-gradient(135deg,var(--coral),#e85f6e);color:white;text-decoration:none;padding:16px 36px;border-radius:9999px;font-size:16px;font-weight:600}
+.next-btn:hover{opacity:.9}
 </style></head><body>
 ${NAV(true)}
 <div class="wrap" id="app"><div style="text-align:center;padding:60px 20px"><div class="bspin" style="margin:0 auto 12px"></div><div style="color:var(--gray);font-size:14px">Cargando análisis...</div></div></div>
@@ -373,7 +544,13 @@ function render(a){
         +'<p style="font-size:14px;color:var(--gray);margin-bottom:16px">Recibe tu plan completo + análisis en tu email. Gratis.</p>'
         +'<button class="btn" onclick="document.getElementById(\\'mb\\').classList.add(\\'o\\')">Recibir análisis completo →</button></div></div></div>'
     )
-    +'</div></div>';
+    +'</div></div>'
+    // Siguiente paso CTA
+    +'<div class="next-cta">'
+    +'<h3>🎯 ¿Quieres el trabajo?</h3>'
+    +'<p>Responde unas preguntas y Miss Pao adaptará tu CV a esta vacante, generará tu carta de presentación y te preparará para la entrevista.</p>'
+    +'<a href="/quiz?id='+a.id+'" class="next-btn">✨ Adaptar mi CV a esta vacante →</a>'
+    +'</div>';
   setTimeout(()=>{const b=document.getElementById('atsb');if(b)b.style.width=a.atsScore+'%'},300);
 }
 async function load(){
@@ -388,6 +565,350 @@ async function load(){
     A=await r.json();render(A);
   }catch{document.getElementById('app').innerHTML='<div style="text-align:center;padding:80px 20px"><h2 style="font-family:serif;font-size:32px;margin-bottom:12px">Análisis no encontrado</h2><p style="color:var(--gray);margin-bottom:20px">El link puede haber expirado.</p><a href="/" style="color:var(--coral)">← Nuevo análisis</a></div>'}
 }
+load();
+</script></body></html>`));
+
+// ─── Quiz ─────────────────────────────────────────────────────────────────────
+app.get("/quiz", (_, res) => res.send(`<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Cuestionario · Mypaotipss</title>${FONTS}
+<style>*{box-sizing:border-box;margin:0;padding:0}:root{${C}}body{font-family:'DM Sans',sans-serif;background:var(--bg);color:#111}
+.wrap{max-width:700px;margin:0 auto;padding:24px 20px}
+.hero{text-align:center;padding:32px 0 24px}
+.hero h1{font-family:'Cormorant Garamond',serif;font-size:clamp(28px,4vw,40px);margin-bottom:8px}
+.hero p{font-size:15px;color:var(--gray);line-height:1.6}
+.q-card{background:white;border:1px solid var(--border);border-radius:16px;padding:20px;margin-bottom:16px}
+.q-num{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:var(--coral);margin-bottom:6px}
+.q-text{font-size:16px;font-weight:600;line-height:1.5;margin-bottom:12px}
+.q-hint{font-size:12px;color:var(--gray);margin-bottom:10px;font-style:italic}
+.q-screen{border-left:3px solid var(--pink)}
+textarea{width:100%;min-height:100px;border:1px solid var(--border);border-radius:10px;padding:12px;font-family:inherit;font-size:14px;resize:vertical;outline:none;line-height:1.6}
+textarea:focus{border-color:var(--coral)}
+.yn{display:flex;gap:16px;margin-top:8px}
+.yn label{display:flex;align-items:center;gap:8px;font-size:15px;cursor:pointer;padding:10px 20px;border:1.5px solid var(--border);border-radius:10px;flex:1;justify-content:center}
+.yn input[type=radio]{accent-color:var(--coral);width:16px;height:16px}
+.yn label:has(input:checked){border-color:var(--coral);background:#fff5f7}
+.cta{text-align:center;padding:8px 0 32px}
+.btn{background:linear-gradient(135deg,var(--coral),#e85f6e);color:white;border:none;padding:16px 40px;border-radius:9999px;font-size:16px;font-weight:600;cursor:pointer;font-family:inherit}
+.btn:hover{opacity:.9}.btn:disabled{opacity:.6;cursor:not-allowed}
+.err{background:#fef2f2;border:1px solid #fecaca;border-radius:12px;padding:12px 16px;font-size:14px;color:#dc2626;margin-bottom:16px;display:none}
+.loading{display:none;text-align:center;padding:40px}
+.spin{width:36px;height:36px;border:3px solid var(--pink);border-top-color:var(--coral);border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 12px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.progress{background:var(--pink);border-radius:9999px;height:6px;margin-bottom:24px}
+.progress-bar{background:var(--coral);height:6px;border-radius:9999px;width:0%;transition:width .5s ease}
+#loading-state{text-align:center;padding:60px 20px}
+</style></head><body>
+${NAV(true)}
+<div class="wrap">
+  <div id="loading-state">
+    <div class="spin" style="margin:0 auto 12px"></div>
+    <div style="color:var(--gray);font-size:14px">Miss Pao está preparando tus preguntas...</div>
+  </div>
+  <div id="quiz-content" style="display:none">
+    <div class="hero">
+      <h1>Cuéntame un poco más</h1>
+      <p id="quiz-sub">Responde estas preguntas para que Miss Pao pueda adaptar tu CV a esta vacante.</p>
+    </div>
+    <div class="progress"><div class="progress-bar" id="pb"></div></div>
+    <div id="questions"></div>
+    <div class="err" id="err"></div>
+    <div class="cta">
+      <div class="loading" id="load">
+        <div class="spin"></div>
+        <div style="font-size:14px;color:var(--gray)">Miss Pao está adaptando tu CV...<br><span style="font-size:12px">30-60 segundos</span></div>
+      </div>
+      <button class="btn" id="btn">✨ Generar mi CV adaptado →</button>
+    </div>
+  </div>
+</div>
+<script>
+const id = new URLSearchParams(location.search).get('id');
+let questionsData = null;
+
+async function loadQuestions() {
+  if (!id) { showError('ID no encontrado'); return; }
+  try {
+    const r = await fetch('/api/questions/' + id);
+    if (!r.ok) throw new Error('No se pudieron cargar las preguntas');
+    questionsData = await r.json();
+    renderQuestions();
+  } catch(e) {
+    document.getElementById('loading-state').innerHTML = '<div style="color:#dc2626;padding:40px 0">' + e.message + '</div><a href="/" style="color:var(--coral)">← Volver</a>';
+  }
+}
+
+function renderQuestions() {
+  document.getElementById('loading-state').style.display = 'none';
+  document.getElementById('quiz-content').style.display = 'block';
+
+  const container = document.getElementById('questions');
+  const total = (questionsData.skillQuestions || []).length + (questionsData.screeningQuestions || []).length;
+
+  (questionsData.skillQuestions || []).forEach(function(q, i) {
+    const card = document.createElement('div');
+    card.className = 'q-card';
+    card.dataset.qid = q.id;
+
+    const num = document.createElement('div');
+    num.className = 'q-num';
+    num.textContent = 'Pregunta ' + (i + 1) + ' de ' + total;
+    card.appendChild(num);
+
+    const text = document.createElement('div');
+    text.className = 'q-text';
+    text.textContent = q.question;
+    card.appendChild(text);
+
+    if (q.hint) {
+      const hint = document.createElement('div');
+      hint.className = 'q-hint';
+      hint.textContent = '💡 ' + q.hint;
+      card.appendChild(hint);
+    }
+
+    const ta = document.createElement('textarea');
+    ta.id = 'answer_' + q.id;
+    ta.placeholder = 'Escribe tu respuesta aquí...';
+    ta.addEventListener('input', updateProgress);
+    card.appendChild(ta);
+    container.appendChild(card);
+  });
+
+  const offset = (questionsData.skillQuestions || []).length;
+  (questionsData.screeningQuestions || []).forEach(function(q, i) {
+    const card = document.createElement('div');
+    card.className = 'q-card q-screen';
+    card.dataset.qid = q.id;
+
+    const num = document.createElement('div');
+    num.className = 'q-num';
+    num.textContent = 'Filtro ' + (i + 1) + ' de ' + total;
+    card.appendChild(num);
+
+    const text = document.createElement('div');
+    text.className = 'q-text';
+    text.textContent = q.question;
+    card.appendChild(text);
+
+    if (q.type === 'yesno') {
+      const yn = document.createElement('div');
+      yn.className = 'yn';
+      yn.innerHTML = '<label><input type="radio" name="scr_' + q.id + '" value="si"> Sí</label><label><input type="radio" name="scr_' + q.id + '" value="no"> No</label>';
+      yn.querySelectorAll('input').forEach(function(inp) { inp.addEventListener('change', updateProgress); });
+      card.appendChild(yn);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.id = 'answer_' + q.id;
+      ta.placeholder = 'Tu respuesta...';
+      ta.style.minHeight = '70px';
+      ta.addEventListener('input', updateProgress);
+      card.appendChild(ta);
+    }
+    container.appendChild(card);
+  });
+
+  document.getElementById('btn').addEventListener('click', submitAnswers);
+  updateProgress();
+}
+
+function updateProgress() {
+  const all = document.querySelectorAll('#questions .q-card');
+  let answered = 0;
+  all.forEach(function(card) {
+    const qid = card.dataset.qid;
+    const ta = document.getElementById('answer_' + qid);
+    if (ta && ta.value.trim().length > 0) { answered++; return; }
+    const radio = document.querySelector('input[name="scr_' + qid + '"]:checked');
+    if (radio) answered++;
+  });
+  document.getElementById('pb').style.width = (all.length > 0 ? (answered / all.length * 100) : 0) + '%';
+}
+
+async function submitAnswers() {
+  const answers = [];
+  let missing = false;
+
+  (questionsData.skillQuestions || []).forEach(function(q) {
+    const ta = document.getElementById('answer_' + q.id);
+    const val = ta ? ta.value.trim() : '';
+    if (!val) missing = true;
+    answers.push({ question: q.question, answer: val || '(sin respuesta)' });
+  });
+
+  (questionsData.screeningQuestions || []).forEach(function(q) {
+    if (q.type === 'yesno') {
+      const radio = document.querySelector('input[name="scr_' + q.id + '"]:checked');
+      if (!radio) missing = true;
+      answers.push({ question: q.question, answer: radio ? radio.value : '(sin respuesta)' });
+    } else {
+      const ta = document.getElementById('answer_' + q.id);
+      const val = ta ? ta.value.trim() : '';
+      if (!val) missing = true;
+      answers.push({ question: q.question, answer: val || '(sin respuesta)' });
+    }
+  });
+
+  if (missing) {
+    const err = document.getElementById('err');
+    err.textContent = 'Por favor responde todas las preguntas antes de continuar.';
+    err.style.display = 'block';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    return;
+  }
+
+  document.getElementById('err').style.display = 'none';
+  document.getElementById('btn').style.display = 'none';
+  document.getElementById('load').style.display = 'block';
+
+  try {
+    const r = await fetch('/api/generate/' + id, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ answers: answers })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Error al generar');
+    sessionStorage.setItem('cv_generated_' + id, JSON.stringify(d));
+    location.href = '/download?id=' + id;
+  } catch(e) {
+    document.getElementById('load').style.display = 'none';
+    document.getElementById('btn').style.display = 'inline-block';
+    const err = document.getElementById('err');
+    err.textContent = e.message || 'Error de conexión. Intenta de nuevo.';
+    err.style.display = 'block';
+  }
+}
+
+function showError(msg) {
+  document.getElementById('loading-state').innerHTML = '<div style="color:#dc2626;padding:40px 0">' + msg + '</div><a href="/" style="color:var(--coral)">← Volver</a>';
+}
+
+loadQuestions();
+</script></body></html>`));
+
+// ─── Download ─────────────────────────────────────────────────────────────────
+app.get("/download", (_, res) => res.send(`<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Tu CV Adaptado · Mypaotipss</title>${FONTS}
+<style>*{box-sizing:border-box;margin:0;padding:0}:root{${C}}body{font-family:'DM Sans',sans-serif;background:var(--bg);color:#111}
+.wrap{max-width:860px;margin:0 auto;padding:24px 20px}
+.hero{text-align:center;padding:32px 0 24px}
+.hero h1{font-family:'Cormorant Garamond',serif;font-size:clamp(28px,4vw,40px);margin-bottom:8px}
+.hero p{font-size:15px;color:var(--gray);line-height:1.6}
+.tabs{display:flex;gap:4px;border-bottom:2px solid var(--border);margin-bottom:20px;overflow-x:auto}
+.tab{padding:10px 18px;font-size:14px;font-weight:500;cursor:pointer;border:none;background:none;color:var(--gray);border-bottom:2px solid transparent;margin-bottom:-2px;font-family:inherit;white-space:nowrap}
+.tab.a{color:var(--coral);border-bottom-color:var(--coral);font-weight:600}
+.pane{display:none}.pane.a{display:block}
+.card{background:white;border:1px solid var(--border);border-radius:16px;padding:24px;margin-bottom:16px}
+.card h3{font-family:'Cormorant Garamond',serif;font-size:24px;margin-bottom:12px}
+.tip{display:flex;gap:12px;padding:14px 0;border-bottom:1px solid var(--border)}.tip:last-child{border-bottom:none}
+.tip-n{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,var(--coral),#e85f6e);color:white;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.imp{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;padding:12px 14px;margin-bottom:8px;font-size:14px;color:#166534}
+.imp:before{content:"✅ ";font-size:13px}
+.email-box{background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:16px;font-size:14px;line-height:1.6;color:#334155;margin-bottom:12px;font-family:monospace}
+.btn{background:linear-gradient(135deg,var(--coral),#e85f6e);color:white;border:none;padding:12px 28px;border-radius:9999px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit}
+.btn:hover{opacity:.9}
+.btn-out{background:white;color:var(--coral);border:2px solid var(--coral);padding:12px 28px;border-radius:9999px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;text-decoration:none;display:inline-block}
+.btn-out:hover{background:#fff5f7}
+.cv-frame{width:100%;height:600px;border:1px solid var(--border);border-radius:12px;background:white}
+.letter-text{white-space:pre-line;font-size:14px;line-height:1.8;color:#333;padding:16px;background:#fafafa;border-radius:12px;border:1px solid var(--border);min-height:200px;max-height:500px;overflow-y:auto;margin-bottom:16px}
+.bspin{width:36px;height:36px;border:3px solid var(--pink);border-top-color:var(--coral);border-radius:50%;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.copied{color:#16a34a;font-size:13px;margin-left:10px;display:none}
+</style></head><body>
+${NAV(true)}
+<div class="wrap">
+  <div id="app"><div style="text-align:center;padding:60px 20px"><div class="bspin" style="margin:0 auto 12px"></div><div style="color:var(--gray);font-size:14px">Cargando resultados...</div></div></div>
+</div>
+<script>
+const id = new URLSearchParams(location.search).get('id');
+let G = null;
+
+function tab(n, btn) {
+  document.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('a'); });
+  document.querySelectorAll('.pane').forEach(function(p) { p.classList.remove('a'); });
+  btn.classList.add('a');
+  document.getElementById('p-' + n).classList.add('a');
+}
+
+function copyText(text, btnId) {
+  navigator.clipboard.writeText(text).then(function() {
+    const el = document.getElementById(btnId);
+    if (el) { el.style.display = 'inline'; setTimeout(function() { el.style.display = 'none'; }, 2000); }
+  });
+}
+
+function render(g) {
+  const app = document.getElementById('app');
+
+  const tipsHtml = (g.interviewTips || []).map(function(t, i) {
+    return '<div class="tip"><div class="tip-n">' + (i+1) + '</div><div style="font-size:14px;line-height:1.6;padding-top:2px">' + t + '</div></div>';
+  }).join('');
+
+  const impsHtml = (g.improvements || []).map(function(imp) {
+    return '<div class="imp">' + imp + '</div>';
+  }).join('');
+
+  const emailSection = g.applicationEmail
+    ? '<div class="card"><h3>📧 Email de Contacto</h3><p style="font-size:14px;color:var(--gray);margin-bottom:12px">Email extraído de la oferta laboral:</p><div class="email-box">' + g.applicationEmail + '</div><button class="btn" onclick="navigator.clipboard.writeText(' + "'" + g.applicationEmail + "'" + ');document.getElementById(\\'email-copied\\').style.display=\\'inline\\'">Copiar email</button><span class="copied" id="email-copied">¡Copiado!</span></div>'
+    : '<div class="card"><h3>📧 Email de Contacto</h3><p style="font-size:14px;color:var(--gray)">No se encontró un email en la oferta laboral. Busca la forma de contacto directamente en la publicación o en LinkedIn.</p></div>';
+
+  const letter = (g.coverLetter || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  app.innerHTML = '<div class="hero"><h1>🎉 Tu CV está adaptado</h1><p>Miss Pao preparó todo lo que necesitas para aplicar con confianza.</p></div>'
+    + impsHtml
+    + '<div class="tabs">'
+    + '<button class="tab a" onclick="tab(\\'cv\\',this)">📄 CV Adaptado</button>'
+    + '<button class="tab" onclick="tab(\\'carta\\',this)">✉️ Carta de Presentación</button>'
+    + '<button class="tab" onclick="tab(\\'prep\\',this)">🎯 Preparación</button>'
+    + '<button class="tab" onclick="tab(\\'email\\',this)">📧 Contacto</button>'
+    + '</div>'
+    // CV tab
+    + '<div class="pane a" id="p-cv">'
+    + '<div class="card"><h3>📄 Tu CV Adaptado</h3>'
+    + '<p style="font-size:14px;color:var(--gray);margin-bottom:16px">Tu CV fue optimizado con las keywords de esta vacante. Para descargarlo como PDF, ábrelo y usa Ctrl+P / Cmd+P.</p>'
+    + '<div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap">'
+    + '<a href="/api/cv/' + id + '?print=1" target="_blank" class="btn">🖨 Abrir y descargar PDF</a>'
+    + '<a href="/api/cv/' + id + '" target="_blank" class="btn-out">👁 Vista previa</a>'
+    + '</div>'
+    + '<iframe class="cv-frame" src="/api/cv/' + id + '" title="CV Adaptado"></iframe>'
+    + '</div></div>'
+    // Carta tab
+    + '<div class="pane" id="p-carta">'
+    + '<div class="card"><h3>✉️ Carta de Presentación</h3>'
+    + '<p style="font-size:14px;color:var(--gray);margin-bottom:12px">Personalizada para esta vacante, siguiendo el formato que mejor convierte.</p>'
+    + '<div class="letter-text" id="letter-text">' + letter + '</div>'
+    + '<button class="btn" onclick="copyText(document.getElementById(\\'letter-raw\\').textContent,\\'letter-copied\\')">Copiar carta</button>'
+    + '<span class="copied" id="letter-copied">¡Copiada!</span>'
+    + '<textarea id="letter-raw" style="display:none">' + letter + '</textarea>'
+    + '</div></div>'
+    // Preparación tab
+    + '<div class="pane" id="p-prep">'
+    + '<div class="card"><h3>🎯 Cómo prepararte para la entrevista</h3>'
+    + tipsHtml
+    + '</div></div>'
+    // Email tab
+    + '<div class="pane" id="p-email">'
+    + emailSection
+    + '</div>';
+}
+
+async function load() {
+  if (!id) {
+    document.getElementById('app').innerHTML = '<div style="text-align:center;padding:80px 20px"><h2>No encontrado</h2><a href="/" style="color:var(--coral)">← Volver</a></div>';
+    return;
+  }
+  const cached = sessionStorage.getItem('cv_generated_' + id);
+  if (cached) {
+    try { G = JSON.parse(cached); render(G); return; } catch(e) {}
+  }
+  try {
+    const r = await fetch('/api/generated/' + id);
+    if (!r.ok) throw new Error();
+    G = await r.json();
+    render(G);
+  } catch(e) {
+    document.getElementById('app').innerHTML = '<div style="text-align:center;padding:80px 20px"><h2 style="font-family:serif;font-size:28px;margin-bottom:12px">Resultados no encontrados</h2><p style="color:var(--gray);margin-bottom:20px">El servidor fue reiniciado. Vuelve al análisis y repite el proceso.</p><a href="/" style="color:var(--coral)">← Nuevo análisis</a></div>';
+  }
+}
+
 load();
 </script></body></html>`));
 
