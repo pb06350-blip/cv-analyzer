@@ -53,7 +53,9 @@ async function analyze(jobText, cvText) {
 }`
     }]
   });
-  return JSON.parse(msg.content[0].text);
+  let text = msg.content[0].text.trim();
+  text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  return JSON.parse(text);
 }
 
 // ─── Send Email ──────────────────────────────────────────────────────────────
