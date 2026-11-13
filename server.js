@@ -103,7 +103,7 @@ app.post("/api/analyze", upload.single("cv"), async (req, res) => {
       }).catch(() => {});
     }
 
-    res.json({ id });
+    res.json({ id, ...result });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: e.message || "Error al analizar" });
@@ -239,6 +239,7 @@ async function go(){
     const r=await fetch('/api/analyze',{method:'POST',body:fd});
     const d=await r.json();
     if(!r.ok)throw new Error(d.error||'Error');
+    sessionStorage.setItem('cv_analysis_'+d.id,JSON.stringify(d));
     location.href='/results?id='+d.id;
   }catch(e){showErr(e.message||'Error de conexión');btn.disabled=false;btn.style.display='inline-block';document.getElementById('load').style.display='none'}
 }
@@ -377,8 +378,12 @@ function render(a){
 }
 async function load(){
   if(!id){document.getElementById('app').innerHTML='<div style="text-align:center;padding:80px 20px"><h2 style="font-family:serif;font-size:32px;margin-bottom:12px">Análisis no encontrado</h2><a href="/" style="color:var(--coral)">← Nuevo análisis</a></div>';return}
+  const cached=sessionStorage.getItem('cv_analysis_'+id);
+  if(cached){try{A=JSON.parse(cached);render(A);return}catch(e){}}
   try{
-    const r=await fetch('/api/analysis/'+id);
+    const ctrl=new AbortController();const t=setTimeout(()=>ctrl.abort(),10000);
+    const r=await fetch('/api/analysis/'+id,{signal:ctrl.signal});
+    clearTimeout(t);
     if(!r.ok)throw new Error();
     A=await r.json();render(A);
   }catch{document.getElementById('app').innerHTML='<div style="text-align:center;padding:80px 20px"><h2 style="font-family:serif;font-size:32px;margin-bottom:12px">Análisis no encontrado</h2><p style="color:var(--gray);margin-bottom:20px">El link puede haber expirado.</p><a href="/" style="color:var(--coral)">← Nuevo análisis</a></div>'}
